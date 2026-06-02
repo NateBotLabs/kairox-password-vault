@@ -1,0 +1,33 @@
+[package]
+name = "kairox-crypto"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]  # cdylib → .wasm, rlib → native
+
+[features]
+default = []
+wasm = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
+
+[dependencies]
+argon2           = { version = "0.5", features = ["zeroize"] }
+chacha20poly1305 = "0.10"
+x25519-dalek     = { version = "2", features = ["static_secrets", "zeroize"] }
+hkdf             = "0.12"
+sha2             = "0.10"
+getrandom        = { version = "0.2", features = ["js"] }
+rand             = { version = "0.8", features = ["getrandom"] }
+zeroize          = { version = "1", features = ["derive"] }
+secrecy          = "0.8"
+serde            = { version = "1", features = ["derive"] }
+ciborium         = "0.2"
+thiserror        = "1"
+
+# WASM-only — only compiled when the "wasm" feature is enabled
+wasm-bindgen             = { version = "0.2", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+
+[dev-dependencies]
+proptest      = "1"
+kairox-types  = { path = "../kairox-types" }

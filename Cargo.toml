@@ -1,0 +1,11 @@
+[package]
+name = "kairox-password-vault"
+version = "0.1.0"
+edition = "2024"
+
+
+[workspace]
+members = ["crates/kairox-crypto", "crates/kairox-types", "crates/kairox-api", "web/src-tauri"]
+resolver = "2"
+
+[dependencies]

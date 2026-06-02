@@ -1,301 +1,163 @@
-# 🔐 Kairox-password-vault
+# Kairox Password Vault
 
-A self-hostable, zero-knowledge, multi-user password vault system built for individuals, teams, and organizations.
+A self-hostable, zero-knowledge password manager for individuals and teams.
 
-Designed with a Rust cryptographic core and a strict security principle:
+> **The server stores data, not secrets.**
 
-> The server stores data, not secrets.
-
----
-
-## 🌌 What this is
-
-`kairox-password-vault` is a distributed password management system where:
-
-* Every secret is encrypted on the client
-* The server never sees plaintext data
-* Access control is enforced through cryptographic keys, not database rules
-* Teams can securely share vaults without trusting the server
-
-Think of it as:
-
-> encrypted vault collections shared through math, not permissions
+All encryption and decryption happens on the client. The server handles only encrypted blobs and cryptographically wrapped keys — it cannot read vault contents under any circumstances.
 
 ---
 
-## 🔐 Core principles
+## Features
 
-### 🧠 Zero-Knowledge by design
-
-* No plaintext passwords stored server-side
-* No master passwords on the backend
-* Server only handles encrypted blobs and wrapped keys
-
-### 🧬 Cryptographic access control
-
-Instead of server-side roles, access is determined by keys:
-
-* Users possess identity keypairs
-* Vault data is split into **collections**
-* Each collection has a **Collection Key (CK)**
-* CK is encrypted per user (“key wrapping”)
-
-If you can decrypt the key, you have access.
+- **Zero-knowledge** — master passwords and encryption keys never leave the client
+- **Multi-user** — share vault collections with teams via cryptographic key wrapping
+- **Self-hostable** — single `docker compose up -d` deployment
+- **Cross-platform** — web app, desktop (Tauri), and browser extension (Chrome MV3)
+- **Offline-capable** — vault data is decrypted locally; API calls only for sync
 
 ---
 
-## 👥 Multi-user model
+## Cryptography
 
-### Organizations
+| Primitive | Algorithm |
+| --- | --- |
+| Key derivation | Argon2id (64 MiB, 3 iterations, 4 lanes) |
+| Symmetric encryption | XChaCha20-Poly1305 |
+| Key wrapping | X25519 ECDH + HKDF-SHA256 |
+| Subkey derivation | HKDF-SHA256 (domain-separated) |
+| Memory safety | `zeroize` + `secrecy` — keys zeroed on drop |
 
-Users belong to organizations containing shared vault collections.
+**Key hierarchy:**
 
-### Collections
-
-Vault is split into logical encrypted groups:
-
-* Personal vault
-* Team vaults
-* Finance vault
-* Admin vault
-
-Each collection:
-
-* has its own encryption key
-* is independent
-* can be shared selectively
-
----
-
-## 🧩 Access control model
-
-There are no server-enforced roles.
-
-Instead:
-
-### Roles = key bundles
-
-| Role    | Meaning                   |
-| ------- | ------------------------- |
-| Admin   | Has all collection keys   |
-| Manager | Has subset of collections |
-| Viewer  | Read-only subset          |
-
-### How access works
-
-1. Collection data is encrypted with a Collection Key (CK)
-2. CK is encrypted for each authorized user using their public key
-3. Users decrypt CK locally
-4. Users decrypt vault entries locally
-
-The server cannot determine access rights.
-
----
-
-## 🧬 Cryptography design
-
-### Key hierarchy
-
-```text id="crypt1"
+```text
 Master Password
-   ↓ Argon2id
-Master Key
-   ↓
-User Identity Keypair
-   ↓
-Collection Key (CK)
-   ↓
-Encrypted Vault Entries
+   ↓  Argon2id
+Master Key (32 bytes)
+   ↓  HKDF  (domain: "kairox-symmetric-v1")
+Symmetric Key  →  encrypts vault entries
+   ↓  HKDF  (domain: "kairox-identity-v1")
+X25519 Identity Keypair  →  receives wrapped Collection Keys
 ```
 
-### Algorithms
-
-* Key derivation: Argon2id
-* Encryption: XChaCha20-Poly1305
-* Key wrapping: public-key encryption
-* Secure random: OS entropy sources
-* Memory safety: zeroization on drop
+Each vault **collection** has its own random Collection Key (CK). The CK is encrypted ("wrapped") for every authorized user using their X25519 public key. Access is purely cryptographic — removing a user means revoking their wrapped key.
 
 ---
 
-## 🔄 Key rotation & revocation
+## Repository layout
 
-To revoke a user:
+```text
+crates/
+  kairox-crypto/    Rust crypto core → compiles to WASM + native rlib
+  kairox-types/     Shared domain types (VaultEntry, EncryptedEntry, WrappedKey)
+  kairox-api/       Axum API server
 
-* Remove their wrapped Collection Keys
-* Optionally rotate Collection Keys
-* Re-encrypt affected data client-side
+sdk/                TypeScript SDK — wraps the WASM crypto in a Web Worker
+web/                React web app + Tauri desktop app (src-tauri/)
+extension/          Chrome MV3 browser extension
 
-> Revocation is cryptographic, not administrative.
-
----
-
-## 🧱 System architecture
-
-```text id="arch1"
-Clients
-  ├── Web App (React)
-  ├── Desktop App (Tauri)
-  ├── Browser Extension (MV3)
-  └── Mobile App (future)
-          │
-          ▼
-   Rust Crypto SDK (WASM + Native)
-          │
-          ▼
-     API Server (Rust / Axum)
-          │
-   ┌──────┴────────┐
-   ▼               ▼
-PostgreSQL     Object Storage (encrypted vaults)
-                (MinIO / S3)
+src/lib.rs          Workspace root placeholder
+Dockerfile          Multi-stage build for kairox-api
+docker-compose.yml  API server + PostgreSQL
+justfile            Dev task runner
 ```
 
 ---
 
-## 🐳 Self-hosting
+## Quick start (Docker)
 
-Run the entire system locally or on a VPS:
-
-```bash id="docker1"
-git clone https://github.com/your-org/kairox-password-vault
+```bash
+git clone https://github.com/nathan6552/kairox-password-vault
 cd kairox-password-vault
 
 cp .env.example .env
+# Edit .env — at minimum set a strong JWT_SECRET
+
 docker compose up -d
 ```
 
----
-
-## 📦 Services included
-
-* Rust API server (Axum)
-* PostgreSQL (metadata + sync state)
-* MinIO (encrypted vault storage)
-* Reverse proxy (Traefik or Nginx)
+The API server starts on port 3000. Open the web app separately (see below) or build it into a static bundle served by the API.
 
 ---
 
-## 🔐 Security model
+## Development setup
 
-### What the server knows
+**Prerequisites:** Rust, Node.js 20+, [wasm-pack](https://rustwasm.github.io/wasm-pack/), [just](https://github.com/casey/just)
 
-* User IDs
-* Encrypted vault blobs
-* Wrapped collection keys
-* Device metadata
+```bash
+# 1. Build the WASM crypto package
+just wasm
 
-### What the server NEVER knows
+# 2. Install JS dependencies and build the SDK
+just sdk-install
+just sdk-build
 
-* Master passwords
-* Decryption keys
-* Vault contents
-* Collection access meaning
+# 3. Start a local Postgres container + the API server
+just db-start
+just dev          # cargo run -p kairox-api  →  localhost:3000
 
----
-
-## 🌐 Sync model
-
-### MVP: Snapshot sync
-
-* Entire vault encrypted per collection
-* Uploaded as encrypted blobs
-* Clients resolve conflicts locally
-
-### Future:
-
-* delta sync
-* CRDT-based merging
-* real-time sync via websockets
-
----
-
-## 🧠 Browser extension (MV3)
-
-* Autofill passwords securely
-* Strict origin validation
-* No page context exposure
-* Secure messaging to desktop/native app
-* Minimal permissions
-
----
-
-## 🧩 Repository structure
-
-```text id="repo1"
-apps/
-  web/
-  desktop/
-  extension/
-
-backend/
-  api/
-  workers/
-
-crates/
-  crypto/
-  vault/
-  sync/
-  sdk/
-
-deploy/
-  docker-compose.yml
-  traefik/
-  minio/
-
-docs/
+# 4. Start the web dev server (separate terminal)
+just web-dev      # Vite  →  http://localhost:5173
 ```
 
----
-
-## ⚠️ Threat model
-
-The system is designed to withstand:
-
-* server compromise
-* database leaks
-* malicious hosting providers
-* MITM attempts
-* stolen backups
-* browser extension attacks (partially mitigated)
-
-Not fully protected against:
-
-* compromised client devices
-* keyloggers
-* malware on user machines
+All `just` recipes are in [justfile](justfile).
 
 ---
 
-## 🚀 Roadmap
+## Browser extension
 
-### Phase 1 (MVP)
+The Chrome MV3 extension lives in `extension/`. After building, load `extension/dist/` as an unpacked extension in `chrome://extensions`.
 
-* Vault encryption engine
-* single-user vaults
-* basic sync API
-* web UI
+```bash
+cd extension
+npm install
+npm run build
+```
 
-### Phase 2
-
-* multi-user organizations
-* collection-based access control
-* browser extension
-* desktop app
-
-### Phase 3
-
-* mobile support
-* secure sharing UX
-* key rotation automation
-* passkey unlock
+Features: autofill on HTTPS login forms, Shadow DOM overlay, origin validation to prevent cross-site credential injection, auto-lock via `chrome.alarms`.
 
 ---
 
-## 🧊 Philosophy
+## What the server knows
 
-> - Security is not permissions enforced by a server.
-> - Security is what remains true even if the server lies.
-> - Your secrets should exist everywhere you need them, but nowhere they can be seen.
+| Stored | Not stored |
+| --- | --- |
+| User IDs, email, Argon2 salt | Master passwords |
+| Encrypted vault blobs | Plaintext vault entries |
+| Wrapped Collection Keys | Decryption keys |
+| JWT auth tokens | Collection membership meaning |
+
+The server cannot distinguish a read from a write, or determine which entries belong to which user, without the client's keys.
 
 ---
+
+## Security model
+
+- **Server compromise** — attacker gets encrypted blobs only; useless without client keys
+- **Database leak** — same as above; all sensitive data is ciphertext
+- **Malicious admin** — cannot read vault contents; can only delete data
+- **MITM** — mitigated by TLS; auth key is a hash-of-hash, not the master key
+- **Autofill phishing** — extension validates exact domain + port before serving credentials
+- **Not covered** — compromised client device, keyloggers, malware
+
+---
+
+## Roadmap
+
+- [x] Crypto core (Argon2id, XChaCha20-Poly1305, X25519 ECIES)
+- [x] API server (Axum + PostgreSQL + JWT)
+- [x] TypeScript SDK with WASM Web Worker isolation
+- [x] React web app
+- [x] Tauri desktop app
+- [x] Chrome MV3 browser extension with autofill
+- [ ] Key rotation UI
+- [ ] Delta sync (currently full snapshot per collection)
+- [ ] Passkey / WebAuthn unlock
+- [ ] Mobile (React Native or Flutter)
+- [ ] Firefox extension
+
+---
+
+## License
+
+[MIT](LICENSE)
